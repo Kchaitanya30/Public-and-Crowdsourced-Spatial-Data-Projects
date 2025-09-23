@@ -1,0 +1,96 @@
+---
+title: "Assignment1 - Illegal dumping Cases and Median Income"
+format: html
+author: "Krishna Mummadi"
+date: "September 2025"
+editor: visual
+---
+
+```{r Load Libraries, echo=TRUE, results='hide', message=FALSE, warning=FALSE}
+# Loading all the libraries requied for the anlaysis
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+install.packages("DBI")
+install.packages("sf")
+install.packages("RPostgres")
+install.packages("dplyr")
+install.packages("stringr")
+install.packages("lubridate")
+install.packages("tidycensus")
+install.packages("arcgislayers")
+install.packages("mapview")
+library(DBI) # Database Interface package
+library(sf) # spatial data operation
+library(arcgislayers) # interface with feature service
+library(RPostgres) # PostgreSQL driver for R
+library(dplyr) # Data manipulation grammar
+library(stringr) # String manipulation 
+library(lubridate) # Date manipulation
+library(tidycensus) #Census data
+library(mapview) #Quick map service
+
+
+# Disable S2 spherical geometry an R package for geometric operations on S2 geometries for spatial indexing and operations, 
+# because some of the geometries cross the prime meridian (in Guam).
+sf::sf_use_s2(FALSE)
+```
+
+```{r Import data 311 and Analysis, echo=TRUE, message=FALSE, warning=FALSE}
+# Importing 311 illegal dumping data from open baltimore
+url1<- "https://services1.arcgis.com/UWYHeuuJISiGmgXx/arcgis/rest/services/311_Customer_Service_Requests_2024/FeatureServer/0"
+
+lyr<- arc_open(url1)
+
+df<- lyr |> arc_select(fields = c( "SRType", "CreatedDate", "CloseDate", "Longitude", "Latitude"))
+
+df1<- df |> mutate(
+  CreatedDate = ymd_hms(CreatedDate, tz="UTC"),
+  CloseDate = ymd_hms(CloseDate, tz="UTC"),
+  
+  timetoclose_secs= round(as.numeric(difftime(CloseDate, CreatedDate, units = "secs")))
+)
+
+# Creating new fields for time to close in days, hours and in characters
+df1<- df1|> mutate(
+  timetoclose_days = round(timetoclose_secs/86400, 3),
+  timetoclose_hours = round(timetoclose_secs/3600, 1),
+  timetoclose = as.character(seconds_to_period(timetoclose_secs)),
+  )
+
+# Flitering our required values formthe Service type
+df_selected<- df1 |> filter(SRType %in% c("SW-Dirty Alley", "SW-Dirty Street"))
+
+
+glimpse(df_selected)
+# To rearrange the columns
+df1<- df1 |> relocate(timetoclose_hours, .before = timetoclose_days)
+# Rows that are 0
+df_selected |> filter(timetoclose_secs==0)|> nrow() 
+#Row that are <= -1
+df_selected |> filter(timetoclose_secs <= -1)|> nrow() #18
+```
+
+```{r Exporting to Json and Shp, echo=TRUE, message=FALSE, warning=FALSE}
+df_sf <- st_as_sf(df_selected, coords = c("Longitude", "Latitude"), crs = 4326)
+st_write(df_sf, "balt_311_illegal_dumping.geojson", delete_dsn = TRUE, quiet = TRUE)
+st_write(df_sf, "balt_311_illegal_dumping.shp", delete_dsn = TRUE, quiet = TRUE)
+```
+
+```{r Export the Demographic Data, echo=TRUE, message=FALSE, warning=FALSE}
+# Tigiris package is used for fetching the median income of baltimore city
+options(tigris_use_cache = TRUE)
+balt_income<- get_acs(
+  geography = "tract",
+  variables = "B19013_001",
+  state = "MD",
+  county = "Baltimore City",
+  year = 2022,
+  geometry = TRUE
+)
+
+glimpse(balt_income)
+st_write(balt_income, "baltimore_income.geojson", delete_dsn = TRUE, quiet = TRUE)
+
+```
+
+\
+\
