@@ -48,4 +48,4 @@ Conclusion:
 There is a relationship between delay in case closure and median income. It can be interpreted that the results both support and challenge the hypothesis, while some low-income tracts show longer delays, there are also high-income tracts has delays, Including the counts data adds useful context to these findings. Overall, this was a valuable exercise that allowed me to use R for data extraction and processing, and to explore analysis and visualization in ArcGIS.
 
 ## Full Report  
-- 📄 [Detailed Report (PDF)](./Assignment_1_krishna.pdf)  
+- 📄 [Detailed Report (PDF)](./Outputs/Assignment_1_krishna.pdf)  
