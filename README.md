@@ -41,7 +41,8 @@ Median: 2.9 days
 Total count: 37800 cases
 
 ### Summary of the timetoclose field
-![Statistics](./Figures/statistics1.jpg width = "600")  
+<img src="./Figures/statistics1.jpg" width="600" height="400"/>
+
 
 Figure 4 shows the time to close in days compared to its count. It is found that the majority of the closure times are below 9 days. There are higher closure times, but they have very few counts.
 Conclusion:
