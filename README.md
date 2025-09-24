@@ -1,4 +1,4 @@
-# 311 Illegal Dumpings cases and its coorelation to the median income of the census tracts in Baltimore City
+# Illegal Dumping Service Requests (311) and Their Correlation with Median Income of Census Tracts in Baltimore City
 
 This report analyzes the closure of 311 illegal dumping cases in Baltimore City, with the hypothesis that Census tracts with higher median household income receive quicker service, while tracts with lower income experience longer delays. To evaluate this, the analysis involved mapping the aggregate mean time to close service requests alongside median household income at the tract level. The two maps are then compared to identify spatial patterns that may support or challenge the hypothesis.
 
