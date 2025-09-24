@@ -16,20 +16,19 @@ Task 2: Polygon layer with Median Household Income at the tract level is used fo
 Geographic patterns and Factors influencing its distribution
 
 
-### Mean Time to Close by Tract  
-![Mean Time to Close](./Figures/meancases.png)  
-
+### Mean Time to Close by Tract
+<img src="./Figures/meancases.png" width="600" height="500"/>
 
 Figure 1 shows that the mean case closure time is higher in the western tracts of Baltimore City, indicating slower service. The pattern appears spatially significant, as its adjacent tracts display high closure times. In contrast, the eastern side of the city shows a mixed pattern, while a few tracts experience longer delays, the majority of tracts report an average closure time of under three days. The service delays are not evenly distributed across the city, but rather clustered in certain neighborhoods.
 
 
 ### Case Counts by Tract  
-![Case Counts](./Figures/Case_counts.png)  
+<img src="./Figures/Case_counts.png" width="600" height="500"/>
 
 Figure 2 represents the counts of service requests by Census tract. The western part of Baltimore shows both high request counts and longer average closure times, which can be interpreted as heavier case volumes may contribute to delays in service. In contrast, near the Inner Harbor, several tracts appear darker on the map despite having few cases. In these areas, the mean closure time could be elevated because a small number of requests took a long time to resolve, which disproportionately raises the average. This shows that case volume and closure times need to be considered for interpretation
 
-### Median Household Income by Tract  
-![Median Income](./Figures/medianincome.png)  
+### Median Household Income by Tract
+<img src="./Figures/medianincome.png" width="600" height="500"/>
 
 Figure 3 shows that median household income is higher in the central and northern parts of Baltimore City. When compared to case closure times, the results both support and challenge the hypothesis that higher-income areas receive faster service. In the western tracts, where the majority of households earn below $61,103, It has delays in service, supporting the hypothesis. However, in some northern tracts, despite higher median incomes, closure times are also long. One possible reason is that few reported cases with delay elevate the mean. 
 
@@ -41,7 +40,7 @@ Median: 2.9 days
 Total count: 37800 cases
 
 ### Summary of the timetoclose field
-<img src="./Figures/statistics1.jpg" width="600" height="400"/>
+<img src="./Figures/statistics1.jpg" width="600" height="500"/>
 
 
 Figure 4 shows the time to close in days compared to its count. It is found that the majority of the closure times are below 9 days. There are higher closure times, but they have very few counts.
