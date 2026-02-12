@@ -5,18 +5,18 @@ format: html
 editor: visual
 ---
 
-```{r}
+{r}
 # Loading all the libraries requied for the anlaysis
 options(repos = c(CRAN = "https://cloud.r-project.org"))
-install.packages("DBI")
-install.packages("sf")
-install.packages("RPostgres")
-install.packages("dplyr")
-install.packages("stringr")
-install.packages("lubridate")
-install.packages("tidycensus")
-install.packages("arcgislayers")
-install.packages("mapview")
+#install.packages("DBI")
+#install.packages("sf")
+#install.packages("RPostgres")
+#install.packages("dplyr")
+#install.packages("stringr")
+#install.packages("lubridate")
+#install.packages("tidycensus")
+#install.packages("arcgislayers")
+#install.packages("mapview")
 library(DBI) # Database Interface package
 library(sf) # spatial data operation
 library(arcgislayers) # interface with feature service
@@ -25,14 +25,15 @@ library(dplyr) # Data manipulation grammar
 library(stringr) # String manipulation 
 library(lubridate) # Date manipulation
 library(tidycensus) #Census data
+options(tigris_use_cache = TRUE) # Tell tigris to cache downloaded shapefiles
 library(mapview) #Quick map service
+library(tidyr)
 
 
 # Disable S2 spherical geometry an R package for geometric operations on S2 geometries for spatial indexing and operations, 
 # because some of the geometries cross the prime meridian (in Guam).
 sf::sf_use_s2(FALSE)
 
-{r Import data 311 and Analysis, echo=TRUE, message=FALSE, warning=FALSE}
 # Importing vacant properties data
 url1<- "https://egisdata.baltimorecity.gov/egis/rest/services/Housing/DHCD_Open_Baltimore_Datasets/FeatureServer/1"
 
@@ -41,23 +42,317 @@ lyr<- arc_open(url1)
 
 df<- lyr |> arc_select(fields = NULL)
 
+View(df)
 
 
-```
+{r}
+#Tigiris package is used for fetching the median income of baltimore city options(tigris_use_cache = TRUE) 
+balt_income<- get_acs( geography = "tract", variables = "B19013_001", state = "MD", county = "Baltimore City", year = 2023, geometry = TRUE )
 
-```{r}s}
-# Tigiris package is used for fetching the median income of baltimore city
-options(tigris_use_cache = TRUE)
-balt_income<- get_acs(
+balt_income_v2<- balt_income |> select(GEOID, median_income = estimate)
+
+balt_income_v3 <- balt_income_v2 |>
+  st_drop_geometry() |>
+  select(GEOID, median_income)
+
+
+{r}
+race_vars <- c(
+  total_pop = "B02001_001",
+  white = "B02001_002",
+  black = "B02001_003",
+  native_american = "B02001_004",
+  asian = "B02001_005",
+  pacific = "B02001_006",
+  other_race = "B02001_007",
+  two_or_more = "B02001_008"
+)
+
+balt_race <- get_acs(
   geography = "tract",
-  variables = "B19013_001",
+  variables = race_vars,
   state = "MD",
   county = "Baltimore City",
-  year = 2022,
+  year = 2023,
   geometry = TRUE
 )
 
-glimpse(balt_income)
-st_write(balt_income, "baltimore_income.geojson", delete_dsn = TRUE, quiet = TRUE)
+{r}
+race_long <- balt_race |>
+  select(GEOID, NAME, variable, estimate, geometry)
 
-```
+# 2) Create attribute table in wide format (no geometry)
+race_attr <- race_long |>
+  st_drop_geometry() |>
+  pivot_wider(
+    names_from  = variable,   # total_pop, white, black, etc.
+    values_from = estimate
+  )
+
+# 3) Bring back geometry + NAME + wide attributes
+balt_race_sf <- race_long |>
+  select(GEOID, NAME, geometry) |>
+  distinct() |>
+  left_join(race_attr, by = c("GEOID", "NAME"))
+
+balt_demo_sf <- balt_race_sf |>
+  left_join(balt_income_v3, by = "GEOID")
+
+
+balt_demo_sf <- balt_demo_sf |>
+  mutate(
+    pct_white       = round(100 * white          / total_pop, 1),
+    pct_black       = round(100 * black          / total_pop, 1),
+    pct_native      = round(100 * native_american / total_pop, 1),
+    pct_asian       = round(100 * asian          / total_pop, 1),
+    pct_pacific     = round(100 * pacific        / total_pop, 1),
+    pct_other_race  = round(100 * other_race     / total_pop, 1),
+    pct_two_or_more = round(100 * two_or_more    / total_pop, 1)
+  )
+
+balt_demo_sf <- balt_demo_sf |>
+  separate(
+    NAME,
+    into = c("tractname", "city", "state"),
+    sep = "; ",
+    remove = TRUE
+  )
+
+{r}
+# Define a function to clean parcel address data for data acquisition
+# Replaces full street type words with standard abbreviations (like "STREET" to "ST").
+# Uses \\b (word boundary) to match whole words only — for example, it will match "STREET" in "MAIN STREET" but not in "STREETLIGHT".
+# Uses $ to make sure the word is at the end of the string (e.g., "123 MAIN STREET" becomes "123 MAIN ST").
+
+baltcity_parcel_ETL <- function(df) {
+  # Load ZIP codes from MD boundaries layer
+  md_zips <- arc_open("https://geodata.md.gov/imap/rest/services/Boundaries/MD_PoliticalBoundaries/FeatureServer/4") |>
+    arc_select(fields = "ZIPCODE1", geometry = FALSE)
+
+  # Street suffix standardization patterns
+  replacements <- c(
+    "\\bSTREET\\b$"     = "ST",
+    "\\bSTRT\\b$"       = "ST",
+    "\\bROAD\\b$"       = "RD",
+    "\\bAVENUE\\b$"     = "AVE",
+    "\\bBOULEVARD\\b$"  = "BLVD",
+    "\\bLANE\\b$"       = "LN",
+    "\\bDRIVE\\b$"      = "DR",
+    "\\bCOURT\\b$"      = "CT",
+    "\\bCIRCLE\\b$"     = "CIR",
+    "\\bPLACE\\b$"      = "PL",
+    "\\bTERRACE\\b$"    = "TER",
+    "\\bPARKWAY\\b$"    = "PKWY",
+    "\\bSQUARE\\b$"     = "SQ",
+    "\\bTRAIL\\b$"      = "TRL",
+    "\\bCENTER\\b$"     = "CTR",
+    "\\bHIGHWAY\\b$"    = "HWY",
+    "\\bWAY\\b$"        = "WAY",
+    "\\bALLEY\\b$"      = "ALY",
+    "\\bCRESCENT\\b$"   = "CRES",
+    "\\bEXPRESSWAY\\b$" = "EXPY",
+    "\\bFREEWAY\\b$"    = "FWY",
+    "\\bJUNCTION\\b$"   = "JCT",
+    "\\bMOUNT\\b$"      = "MT",
+    "\\bRIDGE\\b$"      = "RDG",
+    "\\bSPRING\\b$"     = "SPG"
+  )
+
+   df |>
+    dplyr::mutate(
+      Account.ID..MDP.Field..ACCTID. = as.character(Account.ID..MDP.Field..ACCTID.), # convert account id to char
+  # Create a concatenated field for premise address. If the street direction is null, handle that in the case_when()
+  # Use trimws() to remove leading/trailing spaces from number and direction fields
+    premise_addr = dplyr::case_when(
+        PREMISE.ADDRESS..Direction..MDP.Field..PREMSDIR..SDAT.Field..22. != "" ~ paste0(
+          trimws(
+            PREMISE.ADDRESS..Number..MDP.Field..PREMSNUM..SDAT.Field..20.
+          ),
+          " ",
+          trimws(
+            PREMISE.ADDRESS..Direction..MDP.Field..PREMSDIR..SDAT.Field..22.
+          ),
+          " ",
+          PREMISE.ADDRESS..Name..MDP.Field..PREMSNAM..SDAT.Field..23.,
+          " ",
+          PREMISE.ADDRESS..Type..MDP.Field..PREMSTYP..SDAT.Field..24.
+        ),
+  # If no street direction, just combine number, name, and type
+        TRUE ~ paste0(
+          trimws(
+            PREMISE.ADDRESS..Number..MDP.Field..PREMSNUM..SDAT.Field..20.
+          ),
+          " ",
+          PREMISE.ADDRESS..Name..MDP.Field..PREMSNAM..SDAT.Field..23.,
+          " ",
+          PREMISE.ADDRESS..Type..MDP.Field..PREMSTYP..SDAT.Field..24.
+        )
+      ),
+  # Convert premise address zipcodes to character type.
+      PREMISE.ADDRESS..Zip.Code..MDP.Field..PREMZIP..SDAT.Field..26. = as.character(
+        PREMISE.ADDRESS..Zip.Code..MDP.Field..PREMZIP..SDAT.Field..26.
+      ),
+  
+  # Perform the following transformation across all 3 columns.
+      across( # across numeric fields, set NA to 0
+        c(
+          C.A.M.A..SYSTEM.DATA..Year.Built..YYYY...MDP.Field..YEARBLT..SDAT.Field..235.
+        ),
+        ~ case_when(!is.na(.) ~ ., TRUE ~ 0)
+      ),
+  # Perform the following transformation across all character type columns.
+  # If the value is blank, then assign the default value: "NA".
+      across(where(is.character), ~ case_when(. != "" ~ ., TRUE ~ "NA")),
+  # across year built, set to 0 when less than 1,000 (e.g. only three digits)
+      across(
+        c(
+          C.A.M.A..SYSTEM.DATA..Year.Built..YYYY...MDP.Field..YEARBLT..SDAT.Field..235.
+        ),
+        ~ case_when(. > 1000 ~ ., TRUE ~ 0)
+      ),
+  # make addresses all caps
+      across(
+        c(premise_addr, MDP.Street.Address..MDP.Field..ADDRESS.),
+        ~ str_replace_all(str_to_upper(.), replacements)
+      )
+    ) |>
+    # rename all fields
+    dplyr::rename(
+      account_id = Account.ID..MDP.Field..ACCTID.,
+      premise_city = PREMISE.ADDRESS..City..MDP.Field..PREMCITY..SDAT.Field..25.,
+      premise_zip = PREMISE.ADDRESS..Zip.Code..MDP.Field..PREMZIP..SDAT.Field..26.,
+      jurscode = Jurisdiction.Code..MDP.Field..JURSCODE.,
+      county_name = County.Name..MDP.Field..CNTYNAME.,
+      geom_long = MDP.Longitude..MDP.Field..DIGXCORD.converted.to.WGS84.,
+      geom_lat = MDP.Latitude..MDP.Field..DIGYCORD.converted.to.WGS84.,
+      lu_code = Land.Use.Code..MDP.Field..LU.DESCLU..SDAT.Field..50.,
+      yr_built = C.A.M.A..SYSTEM.DATA..Year.Built..YYYY...MDP.Field..YEARBLT..SDAT.Field..235.,
+      real_prop_link = Real.Property.Search.Link
+    ) |>
+    # create geometry object
+    st_as_sf(
+      coords = c("geom_long", "geom_lat"),
+      crs = 4269,
+      remove = FALSE,
+      sf_column_name = "geom"
+    ) |>
+    # project into md state plane
+    st_transform(26985) |>
+    # drop unused columns
+    select(-c(
+      starts_with("PREMISE", ignore.case = FALSE),
+      starts_with("SALES"),
+      starts_with("geom_")
+    )) |>
+      mutate(
+           premise_state = "MD") |>
+    # rearrange to match data model
+    relocate(
+      account_id,
+      premise_addr,
+      premise_city,
+      premise_zip,
+      premise_state,
+      jurscode,
+      county_name,
+      yr_built,
+      lu_code,
+      real_prop_link,
+      lu_code_flag,
+      geom
+    )
+}
+
+{r}
+soql <- str_replace_all(
+  "SELECT 
+  case(
+    land_use_code_mdp_field_lu_desclu_sdat_field_50 LIKE 'Residential (R)' 
+    OR land_use_code_mdp_field_lu_desclu_sdat_field_50 LIKE 'Apartments (M)' 
+    OR land_use_code_mdp_field_lu_desclu_sdat_field_50 LIKE 'Commercial Residential (CR)' 
+    OR land_use_code_mdp_field_lu_desclu_sdat_field_50 LIKE 'Residential Condominium (U)' 
+    OR land_use_code_mdp_field_lu_desclu_sdat_field_50 LIKE 'Residential Commercial (RC)' 
+    OR land_use_code_mdp_field_lu_desclu_sdat_field_50 LIKE 'Town House (TH)', 
+    1, 
+    true, 
+    0
+  ) as lu_code_flag, 
+  account_id_mdp_field_acctid, 
+  mdp_longitude_mdp_field_digxcord_converted_to_wgs84, 
+  mdp_latitude_mdp_field_digycord_converted_to_wgs84, 
+  jurisdiction_code_mdp_field_jurscode, 
+  county_name_mdp_field_cntyname, 
+  mdp_street_address_mdp_field_address, 
+  mdp_street_address_city_mdp_field_city, 
+  mdp_street_address_zip_code_mdp_field_zipcode, 
+  premise_address_number_mdp_field_premsnum_sdat_field_20, 
+  premise_address_number_suffix_sdat_field_21, 
+  premise_address_direction_mdp_field_premsdir_sdat_field_22, 
+  premise_address_name_mdp_field_premsnam_sdat_field_23, 
+  premise_address_type_mdp_field_premstyp_sdat_field_24, 
+  premise_address_city_mdp_field_premcity_sdat_field_25, 
+  premise_address_zip_code_mdp_field_premzip_sdat_field_26, 
+  premise_address_zip_4_code_mdp_field_premzip2_sdat_field_27, 
+  c_a_m_a_system_data_year_built_yyyy_mdp_field_yearblt_sdat_field_235, 
+  land_use_code_mdp_field_lu_desclu_sdat_field_50, 
+  real_property_search_link 
+WHERE 
+  account_id_mdp_field_acctid IS NOT NULL 
+  AND account_id_mdp_field_acctid <> '0' 
+  AND mdp_longitude_mdp_field_digxcord_converted_to_wgs84 <> 0 
+  AND mdp_latitude_mdp_field_digycord_converted_to_wgs84 <> 0 
+  AND mdp_longitude_mdp_field_digxcord_converted_to_wgs84 IS NOT NULL 
+  AND mdp_latitude_mdp_field_digycord_converted_to_wgs84 IS NOT NULL 
+LIMIT 
+  1000000",
+  c(" " = "%20", "\n" = "")
+)
+
+{r}
+Baltcity_url <- "https://opendata.maryland.gov/resource/qfyw-ryt6.csv?$query="
+
+
+Baltcity_df <- read.csv(paste0(Baltcity_url, soql)) |>
+  baltcity_parcel_ETL()
+
+{r}
+crime_url<- "https://services1.arcgis.com/UWYHeuuJISiGmgXx/arcgis/rest/services/Part1_Crime_Beta/FeatureServer/0"
+
+crime_lyr <- arc_open(crime_url)
+
+crime_raw <- arc_select(crime_lyr)
+crime_sf <- st_as_sf(crime_raw)
+
+{r}
+library(dplyr)
+library(lubridate)
+
+crime_sf_year <- crime_sf |>
+  mutate(crime_year = year(CrimeDateTime)) |>
+  filter(crime_year >= 2023)
+
+table(crime_sf_year$crime_year)
+
+st_write(
+  obj = crime_sf_year,
+  dsn = "balt_crime_points2.gpkg",
+  layer = "crime_2023_present",
+  append = TRUE
+)
+
+
+{r}
+vacant_url <- "https://egisdata.baltimorecity.gov/egis/rest/services/Housing/DHCD_Open_Baltimore_Datasets/FeatureServer/1"
+
+vacant_lyr <- arc_open(vacant_url)
+
+vacant_raw <- arc_select(vacant_lyr)
+
+vacant_sf <- st_as_sf(vacant_raw)
+
+{r}
+st_write(balt_demo_sf, "balt_tracts_demo.gpkg", delete_dsn = TRUE)
+st_write(vacant_sf,    "balt_vacant_points.gpkg", delete_dsn = TRUE)
+st_write(crime_sf,     "balt_crime_points.gpkg",  delete_dsn = TRUE)
+st_write(Baltcity_df, "balt_property_data.gpkg", delete_dsn = TRUE)
+
